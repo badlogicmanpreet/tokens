@@ -1,4 +1,4 @@
-# Mini Autograd Library
+# Tiny Autograd Library
 
 A simple autograd library inspired by karpathy!
 
