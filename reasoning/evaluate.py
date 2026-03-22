@@ -17,7 +17,8 @@ import torch
 
 from src.config import MODELS
 from src.generate import generate, pick_device
-from src.inference import cot_prompt, self_consistency
+from src.inference import cot_prompt, self_consistency, self_refine
+from src.scoring import heuristic_score
 from src.tokenizer import Tokenizer
 from src.verify import extract_answer, grade
 from src.weights import load_hf_model
@@ -84,6 +85,7 @@ def evaluate(
       - 'greedy':  deterministic argmax decoding
       - 'cot':     chain-of-thought prompting (greedy)
       - 'vote':    self-consistency with majority voting
+      - 'refine':  self-refinement with iterative critique
     """
     n = len(data)
     correct = 0
@@ -95,6 +97,8 @@ def evaluate(
     print(f"Mode: {mode} | Problems: {n}")
     if mode == "vote":
         print(f"  samples={num_samples}, temp={temperature}, top_p={top_p}")
+    if mode == "refine":
+        print(f"  iterations={num_samples}, temp={temperature}, top_p={top_p}")
 
     with open(out_path, "w") as f:
         for i, row in enumerate(data, 1):
@@ -114,6 +118,22 @@ def evaluate(
                 )
                 predicted = result["winner"] or ""
                 response = f"votes: {result['counts']}"
+            elif mode == "refine":
+                if seed is not None:
+                    torch.manual_seed(seed + i)
+                result = self_refine(
+                    model, tokenizer,
+                    raw_question=row["problem"],
+                    formatted_prompt=prompt,
+                    device=device,
+                    iterations=num_samples,  # reuse --samples as iteration count
+                    max_tokens=max_tokens,
+                    temperature=temperature, top_p=top_p,
+                    score_fn=heuristic_score,
+                    verbose=verbose,
+                )
+                predicted = result["extracted"]
+                response = f"score: {result['score']:.3f}"
             else:
                 response = generate(
                     model, tokenizer, prompt, device,
@@ -168,7 +188,7 @@ def evaluate(
 def main():
     parser = argparse.ArgumentParser(description="Evaluate on MATH-500")
     parser.add_argument("--model", default="qwen3-1.7b", choices=list(MODELS))
-    parser.add_argument("--mode", default="greedy", choices=["greedy", "cot", "vote"])
+    parser.add_argument("--mode", default="greedy", choices=["greedy", "cot", "vote", "refine"])
     parser.add_argument("--n", type=int, default=10, help="Number of problems (0=all)")
     parser.add_argument("--max-tokens", type=int, default=512)
     parser.add_argument("--samples", type=int, default=5, help="Samples for vote mode")
