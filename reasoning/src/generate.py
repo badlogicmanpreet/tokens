@@ -109,6 +109,46 @@ def pick_device() -> torch.device:
     return torch.device("cpu")
 
 
+def generate(model, tokenizer, prompt: str, device, max_tokens: int = 2048,
+             verbose: bool = False) -> str:
+    """High-level helper: encode prompt → generate → decode to string.
+
+    Args:
+        model: the language model
+        tokenizer: Tokenizer instance
+        prompt: raw text prompt
+        device: torch device
+        max_tokens: max new tokens to generate
+        verbose: print tokens as they are generated
+    """
+    input_ids = torch.tensor(
+        tokenizer.encode(prompt), device=device
+    ).unsqueeze(0)
+
+    cache = KVCache(n_layers=model.cfg["n_layers"])
+    model.reset_cache_state()
+    model.eval()
+
+    logits = model(input_ids, cache=cache)[:, -1]
+    generated = []
+
+    with torch.inference_mode():
+        for _ in range(max_tokens):
+            next_tok = logits.argmax(dim=-1, keepdim=True)
+            tok_id = next_tok.item()
+
+            if tok_id == tokenizer.eos_id:
+                break
+
+            generated.append(tok_id)
+            if verbose:
+                print(tokenizer.decode([tok_id]), end="", flush=True)
+
+            logits = model(next_tok, cache=cache)[:, -1]
+
+    return tokenizer.decode(generated)
+
+
 def benchmark(fn, *args, warmup: int = 0, **kwargs) -> tuple[torch.Tensor, float]:
     """Run *fn* and return (result, elapsed_seconds).
 

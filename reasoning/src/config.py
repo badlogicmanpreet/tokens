@@ -7,20 +7,61 @@ architectures or experiment with smaller/larger models.
 
 import torch
 
+# ---- Default model for all chapters ----
+
+QWEN3_17B = {
+    "name": "qwen3-1.7b",
+    "repo_id": "Qwen/Qwen3-1.7B",
+    "vocab_size": 151_936,
+    "max_seq_len": 40_960,
+    "dim": 2048,
+    "n_heads": 16,
+    "n_kv_heads": 8,
+    "n_layers": 28,
+    "ffn_dim": 6144,
+    "head_dim": 128,
+    "rope_theta": 1_000_000.0,
+    "norm_eps": 1e-6,
+    "qk_norm": True,
+    "dtype": torch.bfloat16,
+}
+
+DEFAULT = QWEN3_17B
+
+# ---- Other models (kept for reference) ----
+
 QWEN3_06B = {
     "name": "qwen3-0.6b",
     "repo_id": "rasbt/qwen3-from-scratch",
     "vocab_size": 151_936,
     "max_seq_len": 40_960,
-    "dim": 1024,               # model / embedding dimension
-    "n_heads": 16,             # query heads
-    "n_kv_heads": 8,           # key-value heads (grouped-query attention)
+    "dim": 1024,
+    "n_heads": 16,
+    "n_kv_heads": 8,
     "n_layers": 28,
-    "ffn_dim": 3072,           # SwiGLU intermediate size
-    "head_dim": 128,           # per-head dimension (independent of dim)
+    "ffn_dim": 3072,
+    "head_dim": 128,
     "rope_theta": 1_000_000.0,
     "norm_eps": 1e-6,
-    "qk_norm": True,           # apply RMSNorm to Q and K projections
+    "qk_norm": True,
+    "dtype": torch.bfloat16,
+}
+
+QWEN25_15B = {
+    "name": "qwen2.5-1.5b",
+    "repo_id": "Qwen/Qwen2.5-1.5B",
+    "vocab_size": 151_936,
+    "max_seq_len": 131_072,
+    "dim": 1536,
+    "n_heads": 12,
+    "n_kv_heads": 2,
+    "n_layers": 28,
+    "ffn_dim": 8960,
+    "head_dim": 128,
+    "rope_theta": 1_000_000.0,
+    "norm_eps": 1e-6,
+    "qk_norm": False,
+    "attn_bias": True,
     "dtype": torch.bfloat16,
 }
 
@@ -34,7 +75,7 @@ LLAMA_32_1B = {
     "n_kv_heads": 8,
     "n_layers": 16,
     "ffn_dim": 8192,
-    "head_dim": 64,            # dim // n_heads
+    "head_dim": 64,
     "rope_theta": 500_000.0,
     "norm_eps": 1e-5,
     "qk_norm": False,
@@ -43,6 +84,8 @@ LLAMA_32_1B = {
 
 # Registry for easy lookup by name
 MODELS = {
+    "qwen3-1.7b": QWEN3_17B,
     "qwen3-0.6b": QWEN3_06B,
+    "qwen2.5-1.5b": QWEN25_15B,
     "llama-3.2-1b": LLAMA_32_1B,
 }

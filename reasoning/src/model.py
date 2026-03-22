@@ -51,7 +51,8 @@ class Attention(nn.Module):
     """
 
     def __init__(self, dim: int, n_heads: int, n_kv_heads: int,
-                 head_dim: int, qk_norm: bool, eps: float, dtype):
+                 head_dim: int, qk_norm: bool, eps: float, dtype,
+                 attn_bias: bool = False):
         super().__init__()
         self.n_heads = n_heads
         self.n_kv_heads = n_kv_heads
@@ -59,9 +60,9 @@ class Attention(nn.Module):
         self.repeats = n_heads // n_kv_heads   # how many Q heads share one KV head
         self.out_dim = n_heads * head_dim
 
-        self.wq = nn.Linear(dim, n_heads * head_dim, bias=False, dtype=dtype)
-        self.wk = nn.Linear(dim, n_kv_heads * head_dim, bias=False, dtype=dtype)
-        self.wv = nn.Linear(dim, n_kv_heads * head_dim, bias=False, dtype=dtype)
+        self.wq = nn.Linear(dim, n_heads * head_dim, bias=attn_bias, dtype=dtype)
+        self.wk = nn.Linear(dim, n_kv_heads * head_dim, bias=attn_bias, dtype=dtype)
+        self.wv = nn.Linear(dim, n_kv_heads * head_dim, bias=attn_bias, dtype=dtype)
         self.wo = nn.Linear(n_heads * head_dim, dim, bias=False, dtype=dtype)
 
         self.q_norm = RMSNorm(head_dim, eps) if qk_norm else None
@@ -140,6 +141,7 @@ class TransformerBlock(nn.Module):
         self.attn = Attention(
             dim=d, n_heads=cfg["n_heads"], n_kv_heads=cfg["n_kv_heads"],
             head_dim=cfg["head_dim"], qk_norm=cfg["qk_norm"], eps=eps, dtype=dt,
+            attn_bias=cfg.get("attn_bias", False),
         )
         self.ffn_norm = RMSNorm(d, eps)
         self.ffn = SwiGLU(d, cfg["ffn_dim"], dt)

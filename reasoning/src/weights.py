@@ -13,7 +13,7 @@ from pathlib import Path
 import torch
 from safetensors.torch import load_file as load_safetensors
 
-from .config import QWEN3_06B, MODELS
+from .config import QWEN3_06B, DEFAULT, MODELS
 from .model import TransformerLM
 from .generate import pick_device
 
@@ -70,6 +70,9 @@ _HF_LAYER = {
     "self_attn.q_proj.weight":              "attn.wq.weight",
     "self_attn.k_proj.weight":              "attn.wk.weight",
     "self_attn.v_proj.weight":              "attn.wv.weight",
+    "self_attn.q_proj.bias":                "attn.wq.bias",
+    "self_attn.k_proj.bias":                "attn.wk.bias",
+    "self_attn.v_proj.bias":                "attn.wv.bias",
     "self_attn.o_proj.weight":              "attn.wo.weight",
     "self_attn.q_norm.weight":              "attn.q_norm.scale",
     "self_attn.k_norm.weight":              "attn.k_norm.scale",
