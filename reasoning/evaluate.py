@@ -1,9 +1,11 @@
 """Evaluate a model on the MATH-500 benchmark.
 
 Usage:
-    uv run python evaluate.py                     # default: qwen3-1.7b, 10 problems
-    uv run python evaluate.py --n 500             # full benchmark
-    uv run python evaluate.py --n 10 --verbose    # see generated answers live
+    uv run python evaluate.py                          # greedy, 10 problems
+    uv run python evaluate.py --mode cot               # chain-of-thought
+    uv run python evaluate.py --mode vote --samples 5  # self-consistency voting
+    uv run python evaluate.py --n 0                    # full 500 problems
+    uv run python evaluate.py --verbose                # see generated answers
 """
 
 import argparse
@@ -15,18 +17,19 @@ import torch
 
 from src.config import MODELS
 from src.generate import generate, pick_device
+from src.inference import cot_prompt, self_consistency
 from src.tokenizer import Tokenizer
 from src.verify import extract_answer, grade
 from src.weights import load_hf_model
 
 ROOT = Path(__file__).resolve().parent
 
+
 # -----------------------------------------------------------------------
 # Prompt template
 # -----------------------------------------------------------------------
 
 def render_prompt(problem: str) -> str:
-    """Wrap a math problem in an evaluation prompt template."""
     return (
         "You are a helpful math assistant.\n"
         "Answer the question and write the final result on a new line as:\n"
@@ -36,14 +39,12 @@ def render_prompt(problem: str) -> str:
 
 
 # -----------------------------------------------------------------------
-# Dataset loading
+# Dataset
 # -----------------------------------------------------------------------
 
 def load_math500(path: Path | None = None) -> list[dict]:
-    """Load the MATH-500 dataset (downloads if not cached locally)."""
     if path is None:
         path = ROOT / "math500_test.json"
-
     if path.exists():
         with path.open("r") as f:
             return json.load(f)
@@ -53,7 +54,7 @@ def load_math500(path: Path | None = None) -> list[dict]:
         "https://raw.githubusercontent.com/rasbt/reasoning-from-scratch/"
         "main/ch03/01_main-chapter-code/math500_test.json"
     )
-    print(f"Downloading MATH-500 dataset...")
+    print("Downloading MATH-500 dataset...")
     with urllib.request.urlopen(url) as resp:
         data = json.loads(resp.read().decode())
     with path.open("w") as f:
@@ -67,67 +68,85 @@ def load_math500(path: Path | None = None) -> list[dict]:
 # -----------------------------------------------------------------------
 
 def evaluate(
-    model,
-    tokenizer,
-    device,
-    data: list[dict],
+    model, tokenizer, device, data,
+    mode: str = "greedy",
     max_tokens: int = 2048,
+    num_samples: int = 5,
+    temperature: float = 0.8,
+    top_p: float = 0.9,
+    seed: int = 42,
     verbose: bool = False,
     out_path: Path | None = None,
 ):
-    """Run the evaluation pipeline on a list of math problems.
+    """Run evaluation on math problems.
 
-    For each problem:
-      1. Render the prompt template
-      2. Generate a response from the model
-      3. Extract the predicted answer
-      4. Grade it against the ground truth
-
-    Returns (n_correct, n_total, accuracy).
+    Modes:
+      - 'greedy':  deterministic argmax decoding
+      - 'cot':     chain-of-thought prompting (greedy)
+      - 'vote':    self-consistency with majority voting
     """
     n = len(data)
     correct = 0
     start = time.time()
 
     if out_path is None:
-        out_path = ROOT / "math500_results.jsonl"
+        out_path = ROOT / f"math500_{mode}.jsonl"
+
+    print(f"Mode: {mode} | Problems: {n}")
+    if mode == "vote":
+        print(f"  samples={num_samples}, temp={temperature}, top_p={top_p}")
 
     with open(out_path, "w") as f:
         for i, row in enumerate(data, 1):
             prompt = render_prompt(row["problem"])
 
-            # Generate
-            response = generate(
-                model, tokenizer, prompt, device,
-                max_tokens=max_tokens, verbose=verbose,
-            )
+            if mode == "cot":
+                prompt = cot_prompt(prompt)
 
-            # Extract and grade
-            predicted = extract_answer(response)
+            if mode == "vote":
+                result = self_consistency(
+                    model, tokenizer, prompt, device,
+                    num_samples=num_samples,
+                    temperature=temperature, top_p=top_p,
+                    max_tokens=max_tokens,
+                    seed=seed + i,
+                    verbose=verbose,
+                )
+                predicted = result["winner"] or ""
+                response = f"votes: {result['counts']}"
+            else:
+                response = generate(
+                    model, tokenizer, prompt, device,
+                    max_tokens=max_tokens, verbose=verbose,
+                )
+                predicted = extract_answer(response)
+
             is_correct = grade(predicted, row["answer"])
             correct += int(is_correct)
 
-            # Save result
             record = {
                 "index": i,
                 "problem": row["problem"],
                 "ground_truth": row["answer"],
-                "response": response,
                 "predicted": predicted,
                 "correct": is_correct,
+                "mode": mode,
             }
+            if mode != "vote":
+                record["response"] = response
+            else:
+                record["votes"] = result["counts"]
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-            # Progress
             elapsed = time.time() - start
-            eta = (elapsed / i) * (n - i) if i > 0 else 0
+            eta = (elapsed / i) * (n - i)
             mark = "+" if is_correct else "x"
             print(
                 f"\r  [{mark}] {i}/{n} | acc={correct/i*100:.1f}% | ETA={eta:.0f}s",
                 end="", flush=True,
             )
 
-            if verbose:
+            if verbose and mode != "vote":
                 print(
                     f"\n    predicted: {predicted}"
                     f"\n    expected:  {row['answer']}"
@@ -149,8 +168,13 @@ def evaluate(
 def main():
     parser = argparse.ArgumentParser(description="Evaluate on MATH-500")
     parser.add_argument("--model", default="qwen3-1.7b", choices=list(MODELS))
+    parser.add_argument("--mode", default="greedy", choices=["greedy", "cot", "vote"])
     parser.add_argument("--n", type=int, default=10, help="Number of problems (0=all)")
-    parser.add_argument("--max-tokens", type=int, default=2048)
+    parser.add_argument("--max-tokens", type=int, default=512)
+    parser.add_argument("--samples", type=int, default=5, help="Samples for vote mode")
+    parser.add_argument("--temperature", type=float, default=0.8)
+    parser.add_argument("--top-p", type=float, default=0.9)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -163,7 +187,16 @@ def main():
         data = data[:args.n]
 
     print(f"\nEvaluating {args.model} on {len(data)} MATH-500 problems\n")
-    evaluate(model, tok, device, data, max_tokens=args.max_tokens, verbose=args.verbose)
+    evaluate(
+        model, tok, device, data,
+        mode=args.mode,
+        max_tokens=args.max_tokens,
+        num_samples=args.samples,
+        temperature=args.temperature,
+        top_p=args.top_p,
+        seed=args.seed,
+        verbose=args.verbose,
+    )
 
 
 if __name__ == "__main__":
