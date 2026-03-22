@@ -1,6 +1,8 @@
 # Building a Reasoning Model — From Base LLM to Text Generation
 
-An end-to-end walkthrough of the pipeline, what every piece does, and how to extend it.
+An end-to-end walkthrough of the pipeline, what every piece does, and how it all connects.
+
+Our standard model throughout this project is **Qwen3-1.7B** (2 billion parameters).
 
 ---
 
@@ -15,10 +17,9 @@ An end-to-end walkthrough of the pipeline, what every piece does, and how to ext
    - [The Model](#4-the-model-modelpy)
    - [KV Cache](#5-kv-cache-cachepy)
    - [Text Generation](#6-text-generation-generatepy)
-   - [Weight Loading](#7-weight-loading-weightspy--downloadpy)
+   - [Weight Loading](#7-weight-loading-weightspy)
 4. [Running the Pipeline](#running-the-pipeline)
-5. [Adding a New Model](#adding-a-new-model)
-6. [What Comes Next — Reasoning](#what-comes-next)
+5. [What Comes Next — Reasoning](#what-comes-next)
 
 ---
 
@@ -28,6 +29,7 @@ An end-to-end walkthrough of the pipeline, what every piece does, and how to ext
 reasoning/
 ├── pyproject.toml          # Dependencies and build config
 ├── run.py                  # Interactive CLI entrypoint
+├── evaluate.py             # MATH-500 evaluation script
 ├── src/
 │   ├── __init__.py
 │   ├── config.py           # Model architecture configs
@@ -36,10 +38,10 @@ reasoning/
 │   ├── model.py            # Transformer LM (the neural network)
 │   ├── tokenizer.py        # Text <-> token IDs
 │   ├── generate.py         # Decoding strategies (greedy, cached)
-│   ├── download.py         # Download Qwen3 weights
-│   └── weights.py          # Load & remap checkpoints
-├── qwen3/                  # Downloaded Qwen3 weights (local)
-└── models/                 # Downloaded HF models (local)
+│   ├── download.py         # Download weight files
+│   ├── weights.py          # Load & remap checkpoints
+│   └── verify.py           # Math answer verification (Ch.3)
+└── models/                 # Downloaded HF model weights (local, gitignored)
 ```
 
 Each file has one job. No circular dependencies. The flow is always left-to-right:
@@ -100,15 +102,16 @@ A config is a plain dictionary that fully describes the shape of a model.
 The model code reads these values — it never hardcodes sizes.
 
 ```python
-QWEN3_06B = {
-    "name": "qwen3-0.6b",
+QWEN3_17B = {
+    "name": "qwen3-1.7b",
+    "repo_id": "Qwen/Qwen3-1.7B",
     "vocab_size": 151_936,     # how many tokens the model knows
     "max_seq_len": 40_960,     # maximum input length in tokens
-    "dim": 1024,               # size of each hidden vector
+    "dim": 2048,               # size of each hidden vector
     "n_heads": 16,             # number of attention query heads
     "n_kv_heads": 8,           # number of key-value heads (GQA)
     "n_layers": 28,            # depth: how many transformer blocks
-    "ffn_dim": 3072,           # feed-forward intermediate size
+    "ffn_dim": 6144,           # feed-forward intermediate size
     "head_dim": 128,           # dimension per attention head
     "rope_theta": 1_000_000.0, # RoPE frequency base
     "norm_eps": 1e-6,          # RMSNorm epsilon
@@ -116,9 +119,6 @@ QWEN3_06B = {
     "dtype": torch.bfloat16,   # weight precision
 }
 ```
-
-**Why this matters:** To add a new model, you only need a new config dict. The
-architecture code doesn't change.
 
 **Key relationship — `n_heads` vs `n_kv_heads`:**
 - `n_heads = 16` query heads, `n_kv_heads = 8` key-value heads
@@ -149,14 +149,10 @@ Neural networks process numbers, not text. The tokenizer is the bridge.
 
 **Why subwords?** A vocabulary can't contain every possible word. BPE (Byte Pair
 Encoding) splits rare words into common pieces. "unhappiness" might become
-["un", "happiness"]. This keeps the vocabulary finite (~150K tokens) while
+["un", "happiness"]. This keeps the vocabulary finite (~152K tokens) while
 representing any text.
 
-**Special tokens:** The tokenizer auto-detects model-specific tokens:
-- Qwen3: `<|endoftext|>` (EOS ID: 151643)
-- Llama 3: `<|end_of_text|>` (EOS ID: 128001)
-
-These tell the model where a response ends.
+**EOS token:** `<|endoftext|>` (ID: 151643) — tells the model where a response ends.
 
 ---
 
@@ -186,10 +182,8 @@ x_rotated = x * cos(position) + [-x_right | x_left] * sin(position)
 ```
 
 **Why rotation?** The dot product between two rotated vectors depends on their
-*relative* position difference, not absolute positions. Token at position 3
-attending to position 1 produces the same angle-dependent score regardless of
-whether those positions are 3,1 or 103,101. This lets the model generalize to
-different sequence lengths.
+*relative* position difference, not absolute positions. This lets the model
+generalize to different sequence lengths.
 
 **The offset parameter:** During cached generation, new tokens arrive one at a
 time but need position numbers that continue from where the prompt left off.
@@ -209,24 +203,18 @@ input x → normalize to unit variance → scale by learned parameter
 Simpler than LayerNorm (no mean centering, no bias). Used before every
 attention and FFN sublayer.
 
-```python
-x = x.float()  # compute in float32 for stability
-x = x * rsqrt(mean(x²) + eps)
-return (x * scale).to(original_dtype)
-```
-
 #### Attention (Grouped-Query Attention)
 
-This is the core mechanism that lets tokens "look at" other tokens.
+The core mechanism that lets tokens "look at" other tokens.
 
 ```
-Input: x (batch, seq_len, 1024)
+Input: x (batch, seq_len, 2048)
   │
-  ├─→ wq(x) → Q: (batch, 16 heads, seq_len, 128)    query: "what am I looking for?"
-  ├─→ wk(x) → K: (batch,  8 heads, seq_len, 128)    key:   "what do I contain?"
-  └─→ wv(x) → V: (batch,  8 heads, seq_len, 128)    value: "what info do I carry?"
+  ├─→ wq(x) → Q: (batch, 16 heads, seq_len, 128)    "what am I looking for?"
+  ├─→ wk(x) → K: (batch,  8 heads, seq_len, 128)    "what do I contain?"
+  └─→ wv(x) → V: (batch,  8 heads, seq_len, 128)    "what info do I carry?"
   │
-  │   [optional: QK norm — normalize Q and K per head]
+  │   [QK norm — normalize Q and K per head]
   │   [apply RoPE — inject position information]
   │   [expand K,V from 8→16 heads by repeating each 2x]
   │
@@ -235,21 +223,19 @@ Input: x (batch, seq_len, 1024)
   ├─→ weights = softmax(scores)              normalize to probabilities
   └─→ output = weights × V                  weighted sum of values
   │
-  └─→ wo(output) → (batch, seq_len, 1024)   project back to model dimension
+  └─→ wo(output) → (batch, seq_len, 2048)   project back to model dimension
 ```
 
 **Causal mask:** Token at position 5 can only attend to positions 0-5, never
-positions 6+. This is what makes the model autoregressive — it can't cheat by
-looking at future tokens.
+positions 6+. This makes the model autoregressive.
 
-**GQA (Grouped-Query Attention):** Instead of 16 separate KV heads (one per
-query head), we use 8 KV heads. Each KV head is shared by 2 query heads via
-`repeat_interleave`. This halves KV memory with <1% quality loss.
+**GQA:** 16 query heads share 8 KV heads (2:1 ratio). Halves KV memory
+with negligible quality loss.
 
 #### SwiGLU (Feed-Forward Network)
 
 After attention mixes information across tokens, the FFN processes each token
-independently to transform its representation:
+independently:
 
 ```
 x → gate(x) → SiLU activation ─┐
@@ -259,11 +245,7 @@ x → up(x) ─────────────────────┘
 
 In code: `down(silu(gate(x)) * up(x))`
 
-The gating mechanism lets the network learn which features to pass through
-and which to suppress. SiLU (Sigmoid Linear Unit) is a smooth activation
-that works better than ReLU for language models.
-
-**Dimensions:** 1024 → 3072 (expand) → 1024 (compress back)
+**Dimensions:** 2048 → 6144 (expand) → 2048 (compress back)
 
 #### TransformerBlock
 
@@ -275,10 +257,8 @@ x ──────────────────────────
    └→ RMSNorm → Attention ────┘    └→ RMSNorm → FFN ─┘
 ```
 
-**Residual connections** (the + arrows) are critical. They let gradients flow
-directly through the network during training and let each layer make
-incremental refinements rather than needing to reconstruct the full
-representation.
+**Residual connections** (the + arrows) let gradients flow directly through
+the network and let each layer make incremental refinements.
 
 #### TransformerLM (Full Model)
 
@@ -288,7 +268,7 @@ Stacks everything together:
 Token IDs (batch, seq_len)
     │
     ▼
-Embedding          151,936 → 1024 dim lookup table
+Embedding          151,936 → 2048 dim lookup table
     │
     ▼
 TransformerBlock × 28      each block: attention + FFN
@@ -297,16 +277,14 @@ TransformerBlock × 28      each block: attention + FFN
 RMSNorm            final normalization
     │
     ▼
-Linear Head        1024 → 151,936 scores (one per vocab token)
+Linear Head        2048 → 151,936 scores (one per vocab token)
     │
     ▼
 Logits (batch, seq_len, 151936)
 ```
 
-The model also:
-- Precomputes RoPE tables once in `__init__` (registered as buffers)
-- Builds causal masks dynamically based on sequence length
-- Tracks position state (`_pos`) for KV cache offsets
+Note: Qwen3-1.7B uses **tied embeddings** — the embedding matrix and the
+output head share the same weights, reducing model size.
 
 ---
 
@@ -329,43 +307,23 @@ Step 2 (decode):   1 new token
                    Concatenate: keys(1, 8, 11, 128), values(1, 8, 11, 128)
                    Q only needs shape (1, 16, 1, 128) — attend to all 11
 
-Step 3 (decode):   1 new token
-                   keys(1, 8, 12, 128), values(1, 8, 12, 128)
-                   ...
+Step 3 (decode):   1 new token → keys(1, 8, 12, 128) ...
 ```
 
-**Implementation:** `KVCache` is a list of slots (one per layer). Each slot
-holds a `(keys, values)` tuple or `None`. The attention layer reads from and
-writes to its slot via `cache[layer_idx]`.
-
-**Speed impact on Apple Silicon MPS:**
+**Speed impact (Qwen3-1.7B on Apple Silicon MPS):**
 | Method           | tok/s |
 |------------------|-------|
-| No cache         | 10    |
-| KV cache         | 29    |
-| Cache + compile  | 38    |
+| No cache         | ~10   |
+| KV cache         | ~15   |
+| Cache + compile  | ~20+  |
 
 ---
 
 ### 6. Text Generation (`generate.py`)
 
-#### `greedy(model, token_ids, max_tokens, eos_id)`
-
-The simplest strategy — always pick the highest-probability token:
-
-```python
-for each step:
-    logits = model(full_sequence)       # run entire sequence through model
-    next_token = argmax(logits[:, -1])  # pick highest score at last position
-    if next_token == eos_id: break      # stop if end-of-sequence
-    append next_token to sequence       # grow the sequence by 1
-```
-
-Simple but slow — reprocesses everything every step.
-
 #### `greedy_cached(model, token_ids, max_tokens, eos_id)`
 
-Same output, but uses KV cache:
+Greedy decoding with KV cache — our standard generation method:
 
 ```python
 cache = KVCache(n_layers)
@@ -381,64 +339,37 @@ for each step:
     logits = model(just_next_token, cache=cache)  # only 1 token!
 ```
 
-#### `pick_device()`
+#### `generate(model, tokenizer, prompt, device, max_tokens)`
 
-Auto-selects the best available hardware:
-CUDA GPU → Apple MPS → Intel XPU → CPU
+High-level wrapper that handles encoding, generation, and decoding:
 
-#### `benchmark(fn, *args, warmup=0)`
-
-Wraps a generation call to measure wall-clock time. The `warmup` parameter
-handles `torch.compile`'s first-run compilation overhead.
+```python
+response = generate(model, tokenizer, "What is 2+2?", device, max_tokens=512)
+```
 
 ---
 
-### 7. Weight Loading (`weights.py` + `download.py`)
+### 7. Weight Loading (`weights.py`)
 
-Pre-trained weights come in different formats with different naming conventions.
-This module translates them into our model's naming.
+Pre-trained weights from HuggingFace use different parameter names than our
+model. The remapping layer translates them:
 
-#### The remapping problem
-
-Our model names parameters like:
 ```
-layers.0.attn.wq.weight
-layers.0.ffn.gate.weight
-norm.scale
+HuggingFace checkpoint              →  Our model
+model.embed_tokens.weight            →  embedding.weight
+model.layers.0.self_attn.q_proj      →  layers.0.attn.wq
+model.layers.0.mlp.gate_proj         →  layers.0.ffn.gate
+model.norm.weight                    →  norm.scale
 ```
 
-But checkpoints use different names:
+**Tied embeddings:** Qwen3-1.7B shares embedding and output head weights.
+When `lm_head.weight` is missing from the checkpoint, the remapper copies
+from `embedding.weight` automatically.
 
-| Source | Checkpoint key | Our key |
-|--------|---------------|---------|
-| Qwen3 .pth | `trf_blocks.0.att.W_query.weight` | `layers.0.attn.wq.weight` |
-| HuggingFace | `model.layers.0.self_attn.q_proj.weight` | `layers.0.attn.wq.weight` |
-
-`_remap_qwen()` and `_remap_hf()` handle this translation via simple
-dictionaries.
-
-#### Tied embeddings
-
-Some models (like Llama 3.2 1B) share the embedding matrix with the output
-head — `lm_head.weight` doesn't exist in the checkpoint. The remapper detects
-this and copies the embedding weights:
-
+**Loading:**
 ```python
-if "head.weight" not in out and "embedding.weight" in out:
-    out["head.weight"] = out["embedding.weight"]
-```
-
-#### Two loading paths
-
-**Qwen3** — custom `.pth` file from a specific mirror:
-```python
-model = load_model("qwen3/qwen3-0.6B-base.pth", cfg=QWEN3_06B, device=device)
-```
-
-**HuggingFace models** — `.safetensors` from the Hub:
-```python
-model, model_dir = load_hf_model("llama-3.2-1b", device=device)
-# model_dir also contains the tokenizer
+model, model_dir = load_hf_model("qwen3-1.7b", device=device, local_dir="models")
+tok = Tokenizer(model_dir / "tokenizer.json")
 ```
 
 ---
@@ -448,101 +379,18 @@ model, model_dir = load_hf_model("llama-3.2-1b", device=device)
 ```bash
 cd ~/git/tokens/reasoning
 
-# Qwen3 0.6B (default, ~1.4GB download first time)
+# Interactive prompt
 uv run python run.py
 
-# Llama 3.2 1B (requires HF login for gated model, ~2.4GB)
-uv run python run.py llama
+# Evaluate on MATH-500 (10 problems)
+uv run python evaluate.py --n 10
+
+# Evaluate with verbose output
+uv run python evaluate.py --n 10 --verbose
 ```
 
-Both models are **base** (pre-trained) models — they complete text, they don't
-follow instructions. This is intentional. The reasoning chapters will add that.
-
----
-
-## Adding a New Model
-
-Any model that uses the same architecture pattern (RoPE + GQA + SwiGLU +
-RMSNorm) can be added in three steps. Here's a concrete example with a
-hypothetical "Mistral 7B":
-
-### Step 1: Add config in `config.py`
-
-```python
-MISTRAL_7B = {
-    "name": "mistral-7b",
-    "repo_id": "mistralai/Mistral-7B-v0.3",
-    "vocab_size": 32_768,
-    "max_seq_len": 32_768,
-    "dim": 4096,
-    "n_heads": 32,
-    "n_kv_heads": 8,
-    "n_layers": 32,
-    "ffn_dim": 14336,
-    "head_dim": 128,          # 4096 / 32
-    "rope_theta": 1_000_000.0,
-    "norm_eps": 1e-5,
-    "qk_norm": False,
-    "dtype": torch.bfloat16,
-}
-
-# Add to registry
-MODELS = {
-    "qwen3-0.6b": QWEN3_06B,
-    "llama-3.2-1b": LLAMA_32_1B,
-    "mistral-7b": MISTRAL_7B,      # ← new
-}
-```
-
-**Where to find these values:** Look at the model's `config.json` on HuggingFace.
-The mapping is:
-```
-hidden_size          → dim
-num_attention_heads  → n_heads
-num_key_value_heads  → n_kv_heads
-num_hidden_layers    → n_layers
-intermediate_size    → ffn_dim
-head_dim             → head_dim  (or dim // n_heads)
-rope_theta           → rope_theta
-rms_norm_eps         → norm_eps
-vocab_size           → vocab_size
-max_position_embeddings → max_seq_len
-```
-
-### Step 2: Check weight naming
-
-Most HuggingFace models use the same naming convention (the `_HF_LAYER` and
-`_HF_TOP` maps in `weights.py`). If your model follows the standard
-`model.layers.N.self_attn.q_proj.weight` pattern, no changes needed.
-
-If it uses different names, add a new remap function in `weights.py`:
-
-```python
-_MYSTRAL_LAYER = {
-    "attention.wq.weight": "attn.wq.weight",
-    # ... custom mappings
-}
-```
-
-### Step 3: Add to `run.py`
-
-```python
-elif choice == "mistral":
-    model, model_dir = load_hf_model("mistral-7b", device=device, local_dir=ROOT / "models")
-    tok = Tokenizer(model_dir / "tokenizer.json")
-```
-
-Then run: `uv run python run.py mistral`
-
-### Models that WON'T work without code changes
-
-- **Models with different attention** (e.g., sliding window, linear attention)
-- **Models with different FFN** (e.g., MoE / Mixture of Experts like Mixtral)
-- **Models with different normalization** (e.g., LayerNorm instead of RMSNorm)
-- **Models with different position encoding** (e.g., ALiBi instead of RoPE)
-
-Most modern open models (Llama, Qwen, Gemma, Phi, SmolLM, OLMo) use the same
-pattern and will work.
+Qwen3-1.7B is a **base** (pre-trained) model — it completes text, it doesn't
+follow instructions. This is intentional. The reasoning chapters add that capability.
 
 ---
 
@@ -555,12 +403,12 @@ reason, follow instructions, or explain its thinking.
 The upcoming chapters add reasoning capabilities on top of this foundation:
 
 ```
- [Chapter 2] Base LLM + text generation     ← YOU ARE HERE
+ [Chapter 2] Base LLM + text generation     ← DONE
       │
       ▼
- [Chapter 3] Evaluation — math verifier
-      │       Build a system that checks if the LLM's answer is correct
-      │       by comparing against reference solutions.
+ [Chapter 3] Evaluation — math verifier      ← DONE
+      │       Checks if the LLM's answer is correct using SymPy.
+      │       Qwen3-1.7B scores ~40% on MATH-500 (base model).
       ▼
  [Chapter 4-5] Inference-time scaling
       │         Make the model "think harder" at generation time without
