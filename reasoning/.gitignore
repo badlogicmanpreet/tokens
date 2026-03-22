@@ -1,0 +1,14 @@
+# Model weights (large binary files)
+qwen3/
+models/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# uv
+uv.lock
+
+# OS
+.DS_Store
