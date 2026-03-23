@@ -208,22 +208,46 @@ Revised answer:
 
 The model generates: `\boxed{83}` — correct!
 
-### Step 4: Accept or reject
+### Step 4: Repeat steps 2-3 for N iterations
 
-```python
-if revised_score >= current_score:
-    current = revised       # accept
-else:
-    pass                    # keep previous answer
+Each iteration takes the current best answer, critiques it, and
+proposes a revision.
+
+### Where does the scorer fit in?
+
+The scorer is **not** part of the 3 core steps (solve → critique →
+revise). It acts as a **gatekeeper between iterations**, deciding
+whether to accept or reject each revision:
+
+```
+Iteration 0:  Solve          → \boxed{18}    score = 2.09
+Iteration 1:  Critique + Revise → \boxed{83}  score = 2.41
+                                    ↓
+                          2.41 > 2.09? → YES, accept
+                                    ↓
+Iteration 2:  Critique + Revise → \boxed{42}  score = 1.80
+                                    ↓
+                          1.80 > 2.41? → NO, reject. Keep \boxed{83}
+                                    ↓
+Final answer: \boxed{83} ✓
 ```
 
-This prevents revisions from making things worse. If the model
-"corrects" a right answer to a wrong one, the scorer catches it.
+**Without a scorer**, every revision is blindly accepted — and sometimes
+the model "corrects" a right answer into a wrong one. The scorer
+prevents that regression.
 
-### Step 5: Repeat
+**With a scorer**, the loop can only improve or stay the same — never
+get worse. This is the key insight: the scorer acts as a ratchet.
 
-Run steps 2-4 for N iterations. Each iteration starts from the
-current best answer.
+In a single-iteration run (`--samples 1`), the scorer has no practical
+effect since there's only one revision to compare against the initial
+answer.
+
+**Which scorer to use?**
+- **Heuristic** — fast, no model calls. Good default. Used in `evaluate.py`.
+- **Logprob** — uses model confidence. Better signal but slower (requires
+  a forward pass per score). Best for harder problems where format-based
+  scoring isn't enough.
 
 ---
 
