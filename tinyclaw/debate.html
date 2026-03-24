@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TinyClaw Debate Arena</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif;
+    background: #ffffff;
+    color: #111;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  header {
+    text-align: center;
+    padding: 24px 20px 16px;
+    background: #fff;
+    border-bottom: 1px solid #e0e0e0;
+  }
+
+  header h1 {
+    font-size: 28px;
+    font-weight: 700;
+    color: #111;
+    margin-bottom: 4px;
+  }
+
+  header .subtitle {
+    color: #888;
+    font-size: 13px;
+  }
+
+  .status-bar {
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    padding: 12px;
+    background: #fafafa;
+    border-bottom: 1px solid #e0e0e0;
+    font-size: 13px;
+    color: #555;
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+
+  .status-dot.connected { background: #22c55e; box-shadow: 0 0 4px #22c55e; }
+  .status-dot.disconnected { background: #ef4444; }
+  .status-dot.waiting { background: #f59e0b; animation: pulse 1.5s infinite; }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  .arena {
+    flex: 1;
+    display: flex;
+    gap: 0;
+    overflow: hidden;
+  }
+
+  .agent-column {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .agent-column:first-child {
+    border-right: 1px solid #e0e0e0;
+  }
+
+  .agent-header {
+    padding: 16px 20px;
+    text-align: center;
+    border-bottom: 1px solid #e0e0e0;
+    flex-shrink: 0;
+  }
+
+  .agent-header .avatar {
+    font-size: 48px;
+    margin-bottom: 8px;
+    display: block;
+  }
+
+  .agent-header .name {
+    font-size: 16px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+  }
+
+  .agent-header .role {
+    font-size: 12px;
+    color: #888;
+    margin-top: 4px;
+  }
+
+  .optimist .agent-header { background: #f0faf6; }
+  .optimist .name { color: #111; }
+  .optimist .thinking-indicator { color: #16a34a; }
+
+  .skeptic .agent-header { background: #faf0f4; }
+  .skeptic .name { color: #111; }
+  .skeptic .thinking-indicator { color: #dc2626; }
+
+  .messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background: #fff;
+  }
+
+  .messages::-webkit-scrollbar { width: 4px; }
+  .messages::-webkit-scrollbar-track { background: transparent; }
+  .messages::-webkit-scrollbar-thumb { background: #ccc; border-radius: 2px; }
+
+  .message {
+    padding: 14px 16px;
+    border-radius: 10px;
+    font-size: 14px;
+    line-height: 1.7;
+    animation: fadeIn 0.3s ease;
+  }
+
+  .optimist .message {
+    background: #f6fdf9;
+    border: 1px solid #d1e7dd;
+  }
+
+  .skeptic .message {
+    background: #fdf6f8;
+    border: 1px solid #e7d1d9;
+  }
+
+  .message .round-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    margin-bottom: 8px;
+    color: #aaa;
+  }
+
+  .thinking-indicator {
+    padding: 10px 16px;
+    font-size: 13px;
+    animation: pulse 1.5s infinite;
+    display: none;
+  }
+
+  .thinking-indicator.active { display: block; }
+
+  .tool-call {
+    padding: 8px 16px;
+    font-size: 12px;
+    color: #888;
+    opacity: 0.7;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .controls {
+    padding: 16px 20px;
+    background: #fafafa;
+    border-top: 1px solid #e0e0e0;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+  }
+
+  .controls input {
+    flex: 1;
+    padding: 10px 14px;
+    background: #fff;
+    border: 1px solid #d0d0d0;
+    border-radius: 8px;
+    color: #111;
+    font-family: inherit;
+    font-size: 14px;
+    outline: none;
+  }
+
+  .controls input:focus { border-color: #111; }
+  .controls input::placeholder { color: #aaa; }
+
+  .controls button {
+    padding: 10px 20px;
+    background: #111;
+    border: none;
+    border-radius: 8px;
+    color: #fff;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .controls button:hover { background: #333; }
+  .controls button:disabled { opacity: 0.3; cursor: not-allowed; }
+
+  .round-divider {
+    text-align: center;
+    padding: 8px;
+    font-size: 11px;
+    color: #aaa;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+  }
+
+  .empty-state {
+    color: #bbb;
+    text-align: center;
+    padding: 40px 20px;
+    font-size: 14px;
+    line-height: 1.8;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>TinyClaw Debate Arena</h1>
+  <div class="subtitle">Agent-to-Agent Communication via OpenClaw</div>
+</header>
+
+<div class="status-bar">
+  <span><span class="status-dot disconnected" id="ws-status"></span> <span id="ws-label">Disconnected</span></span>
+  <span id="round-counter">Round: --</span>
+  <span id="turn-counter">Turns: 0</span>
+</div>
+
+<div class="arena">
+  <div class="agent-column optimist">
+    <div class="agent-header">
+      <span class="avatar">&#127774;</span>
+      <div class="name">Optimist</div>
+      <div class="role">Argues FOR the proposition</div>
+    </div>
+    <div class="messages" id="optimist-messages">
+      <div class="empty-state">Waiting for debate to start...</div>
+    </div>
+    <div class="thinking-indicator" id="optimist-thinking">Thinking...</div>
+  </div>
+
+  <div class="agent-column skeptic">
+    <div class="agent-header">
+      <span class="avatar">&#127769;</span>
+      <div class="name">Skeptic</div>
+      <div class="role">Argues AGAINST the proposition</div>
+    </div>
+    <div class="messages" id="skeptic-messages">
+      <div class="empty-state">Waiting for debate to start...</div>
+    </div>
+    <div class="thinking-indicator" id="skeptic-thinking">Thinking...</div>
+  </div>
+</div>
+
+<div class="controls">
+  <input type="text" id="topic-input"
+    placeholder="Enter debate topic... e.g. Remote work is better than office work"
+    value="Open source AI will overtake closed-source AI within 5 years" />
+  <button id="start-btn" onclick="startDebate()">Start Debate</button>
+  <span id="start-hint" style="color:#666;font-size:12px;display:none;">Starting via CLI...</span>
+</div>
+
+<script>
+const GATEWAY_WS = 'ws://127.0.0.1:18789/ws';
+const GATEWAY_HTTP = 'http://127.0.0.1:18789';
+const TOKEN = '746d9b9164aad90762950daa0cdb21830d08650b58a8928f';
+
+let ws = null;
+let turnCount = 0;
+let currentRound = 0;
+let reqId = 10;
+// Track which agents have started to count rounds properly
+let optimistStarted = false;
+
+// ---- WebSocket connection ----
+
+function connect() {
+  ws = new WebSocket(GATEWAY_WS);
+
+  ws.onopen = () => {
+    // Send connect handshake
+    ws.send(JSON.stringify({
+      type: 'req',
+      id: '1',
+      method: 'connect',
+      params: {
+        minProtocol: 3,
+        maxProtocol: 3,
+        client: {
+          id: 'webchat',
+          version: '0.1.0',
+          platform: 'browser',
+          mode: 'webchat'
+        },
+        auth: { token: TOKEN }
+      }
+    }));
+  };
+
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+
+    // Handle connect response
+    if (msg.type === 'res' && msg.id === '1') {
+      if (msg.error) {
+        setStatus('disconnected', 'Auth failed: ' + msg.error);
+        return;
+      }
+      setStatus('connected', 'Connected');
+      return;
+    }
+
+    // Handle agent events
+    if (msg.type === 'event' && msg.event === 'agent') {
+      console.log('agent event:', msg.payload);
+      handleAgentEvent(msg.payload);
+    }
+
+    // Log chat events too
+    if (msg.type === 'event' && msg.event === 'chat') {
+      console.log('chat event:', msg.payload);
+    }
+  };
+
+  ws.onclose = () => {
+    setStatus('disconnected', 'Disconnected');
+    setTimeout(connect, 3000);
+  };
+
+  ws.onerror = () => {
+    setStatus('disconnected', 'Connection error');
+  };
+}
+
+function setStatus(state, label) {
+  document.getElementById('ws-status').className = 'status-dot ' + state;
+  document.getElementById('ws-label').textContent = label;
+}
+
+// ---- Agent event handling ----
+
+// Track latest full text per run (events are cumulative, not deltas)
+const runTexts = {};
+
+function handleAgentEvent(payload) {
+  const stream = payload.stream || '';
+  const data = payload.data || {};
+  const sessionKey = payload.sessionKey || '';
+  const runId = payload.runId || '';
+  const agentId = agentFromSessionKey(sessionKey);
+
+  if (agentId !== 'optimist' && agentId !== 'skeptic') return;
+
+  if (stream === 'assistant') {
+    // data.text is the FULL accumulated text, not a delta
+    const text = data.text || '';
+    if (!text) return;
+
+    runTexts[runId] = { agent: agentId, text: text };
+    updateRunMessage(runId, agentId, text);
+  }
+
+  if (stream === 'tool') {
+    const toolName = data.name || data.tool || '';
+    if (toolName) {
+      addToolCall(agentId, toolName);
+    }
+  }
+
+  if (stream === 'lifecycle') {
+    const phase = data.phase || '';
+    if (phase === 'start') {
+      setThinking(agentId, true);
+      turnCount++;
+      // Each pair of turns (optimist + skeptic) = 1 round
+      currentRound = Math.ceil(turnCount / 2);
+      document.getElementById('round-counter').textContent = 'Round: ' + currentRound;
+      document.getElementById('turn-counter').textContent = 'Turns: ' + turnCount;
+    }
+    if (phase === 'end') {
+      setThinking(agentId, false);
+    }
+  }
+}
+
+function agentFromSessionKey(key) {
+  if (!key) return 'unknown';
+  const parts = key.split(':');
+  if (parts.length >= 2 && parts[0] === 'agent') return parts[1];
+  return 'unknown';
+}
+
+function updateRunMessage(runId, agentId, text) {
+  const container = document.getElementById(agentId + '-messages');
+
+  // Clear empty state
+  const empty = container.querySelector('.empty-state');
+  if (empty) empty.remove();
+
+  let el = document.getElementById('msg-' + runId);
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'msg-' + runId;
+    el.className = 'message';
+    el.innerHTML = '<div class="round-label">Round ' + currentRound + '</div><div class="content"></div>';
+    container.appendChild(el);
+  }
+
+  // Replace with full text (events are cumulative)
+  el.querySelector('.content').textContent = text;
+
+  // Auto-scroll
+  container.scrollTop = container.scrollHeight;
+}
+
+function addToolCall(agentId, toolName) {
+  const container = document.getElementById(agentId + '-messages');
+  const el = document.createElement('div');
+  el.className = 'tool-call';
+  el.textContent = 'tool: ' + toolName;
+  container.appendChild(el);
+  container.scrollTop = container.scrollHeight;
+}
+
+function setThinking(agentId, active) {
+  const el = document.getElementById(agentId + '-thinking');
+  el.className = 'thinking-indicator' + (active ? ' active' : '');
+}
+
+// ---- Start debate ----
+
+function startDebate() {
+  const topic = document.getElementById('topic-input').value.trim();
+  if (!topic) return;
+
+  const btn = document.getElementById('start-btn');
+  btn.disabled = true;
+  btn.textContent = 'Debating...';
+  document.getElementById('start-hint').style.display = 'inline';
+
+  // Reset UI
+  turnCount = 0;
+  currentRound = 0;
+  optimistStarted = false;
+  document.getElementById('turn-counter').textContent = 'Turns: 0';
+  document.getElementById('round-counter').textContent = 'Round: --';
+  document.getElementById('optimist-messages').innerHTML = '';
+  document.getElementById('skeptic-messages').innerHTML = '';
+  Object.keys(runBuffers).forEach(k => delete runBuffers[k]);
+
+  setStatus('waiting', 'Debate starting...');
+
+  // Trigger via local HTTP endpoint that runs openclaw agent CLI
+  fetch('http://127.0.0.1:8421/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ topic: topic })
+  })
+  .then(r => r.json())
+  .then(data => {
+    setStatus('connected', 'Connected');
+    document.getElementById('start-hint').textContent = 'Debate launched!';
+    setTimeout(() => {
+      btn.textContent = 'Start Debate';
+      btn.disabled = false;
+      document.getElementById('start-hint').style.display = 'none';
+    }, 3000);
+  })
+  .catch(err => {
+    console.error('Start failed:', err);
+    document.getElementById('start-hint').textContent = 'Error — check terminal';
+    btn.textContent = 'Start Debate';
+    btn.disabled = false;
+  });
+}
+
+// ---- Init ----
+connect();
+</script>
+
+</body>
+</html>
