@@ -148,6 +148,14 @@ class Value:
         """
         return self * other**-1
 
+    def __rsub__(self, other):
+        """Support `number - Value`, e.g. 1 - x (used in sigmoid-style math)."""
+        return Value(other) + (-self)
+
+    def __rtruediv__(self, other):
+        """Support `number / Value`, e.g. 1 / x."""
+        return Value(other) * self**-1
+
     def tanh(self):
         """
         Perform hyperbolic tangent operation on a Value object.

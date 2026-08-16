@@ -74,6 +74,7 @@ class Network:
             self.lossi.append(loss.log10().item()) # log10 of the loss, because when you plot the loss it appears as a hockey stick, we squash it using log10
 
     def plot_loss(self, trainable_params_size):
+        plt.figure()  # fresh figure — otherwise curves from every run pile up
         plt.plot(self.stepi, self.lossi)
         plt.savefig(f'src/neural_language_model/params_loss_plots/{trainable_params_size}_loss.png') # save the plot as a png file
 

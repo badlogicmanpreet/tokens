@@ -22,7 +22,6 @@ def main():
     run(block_size=3, emb_size=20, number_inputs=3, num_neurons=300)
     run(block_size=3, emb_size=30, number_inputs=3, num_neurons=300)
     run(block_size=3, emb_size=25, number_inputs=3, num_neurons=400)
-    run(block_size=3, emb_size=30, number_inputs=3, num_neurons=300)
     run(block_size=3, emb_size=30, number_inputs=3, num_neurons=400)
     run(block_size=3, emb_size=40, number_inputs=3, num_neurons=500) # -> good model -> 75107 trainable parameters
         

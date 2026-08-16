@@ -19,7 +19,8 @@ def train(xs, ys, n):
         for p in n.parameters():
             p.data += -0.1 * p.grad
 
-        print(k, loss)
+        print(k, round(loss.data, 6))
 
-    print("Predictions:", ypred)
+    print("Targets:    ", ys)
+    print("Predictions:", [round(y.data, 2) for y in ypred])
 

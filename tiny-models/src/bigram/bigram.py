@@ -37,7 +37,7 @@ class Bigram:
                 xs.append(i)
                 ys.append(j)
 
-        xs = torch.tensor(xs) # tensor vs Tensor (int32 vs float32)
+        xs = torch.tensor(xs) # tensor vs Tensor (int64 vs float32)
         ys = torch.tensor(ys)
         num = xs.nelement() # number of elements in the tensor
         print(f'number of elements in the tensor: {num}')
@@ -58,7 +58,7 @@ class Bigram:
             loss.backward() # calculate the gradients
 
             # update the weights
-            self.W.data += -50 * self.W.grad # learning rate of 0.1
+            self.W.data += -50 * self.W.grad # learning rate of 50
 
     def generate_name(self, itos):
         g = torch.Generator().manual_seed(2147483647) # random seed, generator is used to be deter

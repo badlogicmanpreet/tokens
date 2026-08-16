@@ -1,7 +1,11 @@
+import random
+
 from neuralnetwork import MLP
 from training import train
 from graph import draw_dot
 from datastructure import Value
+
+random.seed(1191)  # reproducible weights: initial loss ~1.77, matching the chapter
 
 def test_autograd():
     """

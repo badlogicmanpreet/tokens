@@ -1,0 +1,1 @@
+graphviz>=0.20   # also requires the system Graphviz 'dot' binary for graph.py
