@@ -97,6 +97,13 @@ _LATEX_SUBS = [
     (r"\\dfrac", r"\\frac"),
     (r"\\tfrac", r"\\frac"),
     (r"°", ""),
+    (r"\\pi\b", "pi"),
+    (r"π", "pi"),
+    (r"\\infty\b", "oo"),
+    (r"∞", "oo"),
+    (r"\\times\b", "*"),
+    (r"\\div\b", "/"),
+    (r"\\(sin|cos|tan|log|ln|exp|gcd|lcm|min|max)\b", r"\1"),
 ]
 
 _RE_SPECIAL_TOK = re.compile(r"<\|[^>]+?\|>")
@@ -219,21 +226,82 @@ def _exprs_equal(a_str: str, b_str: str) -> bool:
     a_sym, b_sym = _parse_sym(a_str), _parse_sym(b_str)
     if a_sym is not None and b_sym is not None:
         try:
-            return simplify(a_sym - b_sym) == 0
-        except (SympifyError, TypeError):
+            if simplify(a_sym - b_sym) == 0:
+                return True
+            # symbolic vs float (e.g. pi/2 vs 1.5707963...): compare numerically
+            diff = (a_sym - b_sym).evalf()
+            if diff.is_number and abs(float(diff)) < 1e-6:
+                return True
+        except (SympifyError, TypeError, ValueError, NotImplementedError,
+                ZeroDivisionError, AttributeError, RecursionError,
+                PolynomialError, OverflowError):
             pass
     return False
 
 
+class _Timeout(Exception):
+    pass
+
+
+def _with_timeout(fn, seconds, default):
+    """Run fn() with a hard time limit (SIGALRM; main thread, POSIX only).
+
+    SymPy can effectively hang on adversarial input like 9**9**9 — a single
+    such answer must not wedge a 500-problem eval or an RL training run.
+    """
+    import signal
+
+    if not hasattr(signal, "SIGALRM"):
+        return fn()  # non-POSIX: no guard available
+
+    def _raise(signum, frame):
+        raise _Timeout()
+
+    prev = signal.signal(signal.SIGALRM, _raise)
+    signal.alarm(seconds)
+    try:
+        return fn()
+    except _Timeout:
+        return default
+    except Exception:
+        return default
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, prev)
+
+
+def _split_top_level(inner: str) -> list[str]:
+    """Split on commas at bracket depth 0 only, so '(gcd(2,3), 5)' -> 2 parts."""
+    parts, depth, cur = [], 0, []
+    for ch in inner:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append("".join(cur).strip())
+            cur = []
+        else:
+            cur.append(ch)
+    parts.append("".join(cur).strip())
+    return parts
+
+
 def _split_tuple(text: str) -> list[str]:
-    """Split a tuple-like string '(a, b)' into ['a', 'b']."""
+    """Split a tuple/interval string '(a, b)' into its elements.
+
+    The bracket style is preserved as a leading marker so that the open
+    interval (0,5) never grades equal to the closed interval [0,5].
+    """
     if not text:
         return []
     if (len(text) >= 2
             and text[0] in "([" and text[-1] in ")]"
             and "," in text[1:-1]):
-        parts = [p.strip() for p in text[1:-1].split(",")]
-        return parts if all(parts) else []
+        parts = _split_top_level(text[1:-1])
+        if len(parts) >= 2 and all(parts):
+            # bracket signature distinguishes (a,b) / [a,b] / (a,b] / [a,b)
+            return [f"BRACKETS:{text[0]}{text[-1]}"] + parts
     return [text]
 
 
@@ -264,4 +332,7 @@ def grade(predicted: str, ground_truth: str) -> bool:
     if len(gt_parts) != len(pred_parts):
         return False
 
-    return all(_exprs_equal(g, p) for g, p in zip(gt_parts, pred_parts))
+    return _with_timeout(
+        lambda: all(_exprs_equal(g, p) for g, p in zip(gt_parts, pred_parts)),
+        seconds=5, default=False,
+    )

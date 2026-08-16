@@ -99,7 +99,10 @@ def _remap_hf(ckpt: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         else:
             print(f"  skipping: {k}")
 
-    # Handle tied embeddings: if lm_head is missing, share embedding weights
+    # Handle tied embeddings: if lm_head is missing the checkpoint ties
+    # embeddings and head. TransformerLM also ties the modules themselves
+    # (head.weight IS embedding.weight), so loading either key updates both
+    # and the tie survives fine-tuning.
     if "head.weight" not in out and "embedding.weight" in out:
         out["head.weight"] = out["embedding.weight"]
 

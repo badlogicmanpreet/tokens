@@ -97,7 +97,8 @@ class Attention(nn.Module):
 
         # Scaled dot-product attention
         scores = (q @ k.transpose(-2, -1)) / math.sqrt(self.head_dim)
-        scores = scores.masked_fill(mask, float("-inf"))
+        if mask is not None:
+            scores = scores.masked_fill(mask, float("-inf"))
         weights = F.softmax(scores.float(), dim=-1).to(q.dtype)
         out = (weights @ v).transpose(1, 2).contiguous().view(B, T, self.out_dim)
 
@@ -176,6 +177,12 @@ class TransformerLM(nn.Module):
         self.layers = nn.ModuleList([TransformerBlock(cfg) for _ in range(cfg["n_layers"])])
         self.norm = RMSNorm(cfg["dim"], cfg["norm_eps"])
         self.head = nn.Linear(cfg["dim"], cfg["vocab_size"], bias=False, dtype=dt)
+        # Qwen3-1.7B ties input embeddings and output head
+        # (config.json: tie_word_embeddings). Sharing the tensor keeps the
+        # parameter count honest (~1.72B, not ~2.0B) and keeps the two in
+        # sync if the model is fine-tuned.
+        if cfg.get("tie_embeddings", True):
+            self.head.weight = self.embedding.weight
 
         # Precompute rotary tables once
         cos, sin = build_rope_table(cfg["head_dim"], cfg["max_seq_len"], cfg["rope_theta"])
@@ -208,11 +215,18 @@ class TransformerLM(nn.Module):
         else:
             pos_offset = self._pos
             total = pos_offset + T
-            full = torch.triu(torch.ones(total, total, dtype=torch.bool, device=x.device), diagonal=1)
-            mask = full[pos_offset:total, :total]
+            if T == 1:
+                # Single-token decode: the new token attends to everything,
+                # so the mask is all-False — skip building a total x total
+                # matrix per step (O(n^2) allocations over a generation).
+                mask = None
+            else:
+                full = torch.triu(torch.ones(total, total, dtype=torch.bool, device=x.device), diagonal=1)
+                mask = full[pos_offset:total, :total]
             self._pos = total
 
-        mask = mask.unsqueeze(0).unsqueeze(0)  # broadcast over batch & heads
+        if mask is not None:
+            mask = mask.unsqueeze(0).unsqueeze(0)  # broadcast over batch & heads
 
         cos = self._rope_cos.to(x.device)
         sin = self._rope_sin.to(x.device)

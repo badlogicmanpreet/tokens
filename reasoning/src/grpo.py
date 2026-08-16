@@ -50,7 +50,7 @@ def sample_rollout(
         probs = _top_p_filter(probs, top_p)
         next_tok = torch.multinomial(probs.cpu(), num_samples=1).to(device)
 
-        if tokenizer.eos_id is not None and next_tok.item() == tokenizer.eos_id:
+        if next_tok.item() in tokenizer.eos_ids:
             break
 
         generated.append(next_tok.item())
@@ -204,6 +204,13 @@ def train_grpo(
                 f"Question:\n{problem}\n\nAnswer:"
             )
 
+    # bf16 has ~3 significant digits: with lr=1e-5 most AdamW updates round
+    # to zero against bf16 master weights. Train in fp32 so updates land.
+    if next(model.parameters()).dtype != torch.float32:
+        model.float()
+        print("Cast model to fp32 for training (bf16 master weights would "
+              "swallow lr=1e-5 updates).")
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 
     print(f"Training GRPO: {steps} steps, {num_rollouts} rollouts/step, "
@@ -225,12 +232,15 @@ def train_grpo(
         if loss is not None:
             optimizer.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             loss_val = loss.item()
+            status = f"loss={loss_val:.4f}"
         else:
-            loss_val = 0.0
+            # equal rewards in the group -> no relative signal; step skipped
+            status = "skipped (no learning signal: all rollouts scored alike)"
 
-        print(f"[Step {step}/{steps}] loss={loss_val:.4f} "
+        print(f"[Step {step}/{steps}] {status} "
               f"reward_avg={avg_reward:.3f} avg_resp_len={avg_len:.1f}")
 
         # Checkpoint

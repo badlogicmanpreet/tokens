@@ -21,10 +21,10 @@ except ImportError:
     sys.exit(1)
 
 GATEWAY_URL = os.environ.get("OPENCLAW_GATEWAY_URL", "ws://127.0.0.1:18789/ws")
-GATEWAY_TOKEN = os.environ.get(
-    "OPENCLAW_GATEWAY_TOKEN",
-    "746d9b9164aad90762950daa0cdb21830d08650b58a8928f",
-)
+GATEWAY_TOKEN = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
+if not GATEWAY_TOKEN:
+    print("Set OPENCLAW_GATEWAY_TOKEN (see the token in ~/.openclaw/openclaw.json)")
+    sys.exit(1)
 
 AGENT_COLORS = {
     "optimist": "\033[92m",  # green
@@ -72,7 +72,12 @@ async def watch():
             },
         }
         await ws.send(json.dumps(connect_msg))
-        hello = json.loads(await ws.recv())
+        # read until the connect response arrives (the gateway may emit
+        # unrelated events before it)
+        while True:
+            hello = json.loads(await ws.recv())
+            if hello.get("type") == "res" and str(hello.get("id")) == "1":
+                break
 
         if hello.get("error"):
             print(f"Connection failed: {hello['error']}")
@@ -81,6 +86,7 @@ async def watch():
         print(f"{DIM}Connected. Waiting for debate events...{RESET}\n")
         print("=" * 60)
 
+        printed = {}  # runId -> chars already printed
         async for raw in ws:
             msg = json.loads(raw)
 
@@ -100,10 +106,19 @@ async def watch():
             agent_id = agent_from_session_key(session_key)
 
             if stream == "assistant":
-                # Text content from the agent
-                text = data.get("text", "") or data.get("delta", "")
+                # data.text is CUMULATIVE (full response so far), so print
+                # only the new suffix since the last frame for this run.
+                run_id = payload.get("runId", session_key)
+                text = data.get("text", "")
                 if text:
-                    print(colorize(agent_id, text))
+                    prev = printed.get(run_id, 0)
+                    if len(text) > prev:
+                        print(colorize(agent_id, text[prev:]), end="", flush=True)
+                        printed[run_id] = len(text)
+                else:
+                    delta = data.get("delta", "")
+                    if delta:
+                        print(colorize(agent_id, delta), end="", flush=True)
 
             elif stream == "tool":
                 tool_name = data.get("name", "") or data.get("tool", "")
@@ -112,6 +127,8 @@ async def watch():
 
             elif stream == "lifecycle":
                 phase = data.get("phase", "")
+                if phase == "end":
+                    print()  # finish the streamed line
                 if phase == "start":
                     print(f"\n{DIM}--- {agent_id} thinking... ---{RESET}")
                 elif phase == "end":

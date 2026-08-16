@@ -5,7 +5,11 @@ import json
 import websockets
 
 GATEWAY_URL = "ws://127.0.0.1:18789/ws"
-TOKEN = "746d9b9164aad90762950daa0cdb21830d08650b58a8928f"
+import os, sys
+TOKEN = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
+if not TOKEN:
+    print("Set OPENCLAW_GATEWAY_TOKEN (see the token in ~/.openclaw/openclaw.json)")
+    sys.exit(1)
 
 async def debug():
     async with websockets.connect(GATEWAY_URL) as ws:

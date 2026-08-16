@@ -39,13 +39,25 @@ class Tokenizer:
         else:
             self._split_re = None
 
-        # Auto-detect EOS based on what tokens are available
+        # Auto-detect EOS based on what tokens are available.
         #   Llama 3:  <|end_of_text|> (128001)
-        #   Qwen3:    <|endoftext|>   (151643)
+        #   Qwen3:    <|im_end|> (151645) is the actual stop token used at
+        #             inference; <|endoftext|> (151643) is the padding/pretrain
+        #             terminator. Treat BOTH as stop tokens (matches Qwen3's
+        #             generation_config eos_token_id: [151645, 151643]).
+        self.eos_ids = {
+            tid for tid in (
+                self._special.get("<|end_of_text|>"),   # Llama 3
+                self._special.get("<|eot_id|>"),        # Llama 3 instruct
+                self._special.get("<|im_end|>"),        # Qwen chat turns
+                self._special.get("<|endoftext|>"),     # Qwen3 / GPT-style
+            ) if tid is not None
+        } or {self._tok.get_vocab_size() - 1}           # fallback: last token
+        # Back-compat single id (used for padding); prefer eos_ids for stopping.
         self.eos_id = (
-            self._special.get("<|end_of_text|>")      # Llama 3
-            or self._special.get("<|endoftext|>")      # Qwen3 / GPT-style
-            or self._tok.get_vocab_size() - 1          # fallback: last token
+            self._special.get("<|end_of_text|>")
+            or self._special.get("<|endoftext|>")
+            or self._tok.get_vocab_size() - 1
         )
 
         self.bos_id = self._special.get("<|begin_of_text|>")  # Llama 3 (None for Qwen)

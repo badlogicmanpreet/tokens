@@ -1,0 +1,25 @@
+{
+  "agents": {
+    "defaults": {
+      "workspace": "~/.openclaw/workspace",
+      "model": "anthropic/claude-sonnet-4-6"
+    },
+    "list": [
+      { "id": "optimist", "workspace": "~/.openclaw/workspace-optimist" },
+      { "id": "skeptic",  "workspace": "~/.openclaw/workspace-skeptic" }
+    ]
+  },
+  "tools": {
+    "sessions": { "visibility": "all" },
+    "agentToAgent": {
+      "enabled": true,
+      "allow": ["optimist", "skeptic"]
+    }
+  },
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "bind": "loopback",
+    "auth": { "mode": "token", "token": "REPLACE-WITH-YOUR-OWN-RANDOM-TOKEN" }
+  }
+}

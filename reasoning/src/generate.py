@@ -21,6 +21,15 @@ from .model import TransformerLM
 # -----------------------------------------------------------------------
 
 @torch.inference_mode()
+def _is_stop(tok_id, eos_id):
+    """eos_id may be a single id or a set of ids."""
+    if eos_id is None:
+        return False
+    if isinstance(eos_id, (set, frozenset, list, tuple)):
+        return tok_id in eos_id
+    return tok_id == eos_id
+
+
 def greedy(model, token_ids, max_tokens, eos_id=None):
     """Deterministic argmax decoding without cache."""
     prompt_len = token_ids.shape[1]
@@ -29,7 +38,7 @@ def greedy(model, token_ids, max_tokens, eos_id=None):
     for _ in range(max_tokens):
         logits = model(token_ids)[:, -1]
         next_tok = logits.argmax(dim=-1, keepdim=True)
-        if eos_id is not None and next_tok.item() == eos_id:
+        if _is_stop(next_tok.item(), eos_id):
             break
         token_ids = torch.cat([token_ids, next_tok], dim=1)
 
@@ -49,7 +58,7 @@ def greedy_cached(model, token_ids, max_tokens, eos_id=None):
 
     for _ in range(max_tokens):
         next_tok = logits.argmax(dim=-1, keepdim=True)
-        if eos_id is not None and next_tok.item() == eos_id:
+        if _is_stop(next_tok.item(), eos_id):
             break
         token_ids = torch.cat([token_ids, next_tok], dim=1)
         logits = model(next_tok, cache=cache)[:, -1]
@@ -72,8 +81,10 @@ def _top_p_filter(probs: torch.Tensor, top_p: float) -> torch.Tensor:
     sorted_probs, sorted_idx = torch.sort(probs, dim=-1, descending=True)
     cumulative = torch.cumsum(sorted_probs, dim=-1)
 
-    # Keep tokens where cumulative prob hasn't exceeded top_p yet
-    keep = cumulative <= top_p
+    # Nucleus sampling: keep the smallest set of top tokens whose cumulative
+    # probability reaches top_p — the token that crosses the threshold stays in
+    # (standard definition; matches HF's TopPLogitsWarper).
+    keep = cumulative - sorted_probs < top_p
     keep[..., 0] = True  # always keep the most probable token
 
     kept_sorted = torch.where(keep, sorted_probs, torch.zeros_like(sorted_probs))
@@ -115,7 +126,7 @@ def sample_cached(
             next_tok = torch.multinomial(probs.cpu(), num_samples=1)
             next_tok = next_tok.to(token_ids.device)
 
-        if eos_id is not None and next_tok.item() == eos_id:
+        if _is_stop(next_tok.item(), eos_id):
             break
 
         token_ids = torch.cat([token_ids, next_tok], dim=1)
@@ -153,10 +164,12 @@ def generate(
     model.reset_cache_state()
     model.eval()
 
-    logits = model(input_ids, cache=cache)[:, -1]
     generated: list[int] = []
 
     with torch.inference_mode():
+        # prefill inside inference_mode too — otherwise the full prompt's
+        # autograd graph is built and held for all layers
+        logits = model(input_ids, cache=cache)[:, -1]
         for _ in range(max_tokens):
             if temperature is None or temperature == 0.0:
                 next_tok = logits.argmax(dim=-1, keepdim=True)
@@ -168,7 +181,7 @@ def generate(
                 next_tok = next_tok.to(device)
 
             tok_id = next_tok.item()
-            if tok_id == tokenizer.eos_id:
+            if _is_stop(tok_id, tokenizer.eos_ids):
                 break
 
             generated.append(tok_id)

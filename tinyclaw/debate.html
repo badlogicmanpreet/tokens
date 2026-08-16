@@ -286,7 +286,9 @@
 <script>
 const GATEWAY_WS = 'ws://127.0.0.1:18789/ws';
 const GATEWAY_HTTP = 'http://127.0.0.1:18789';
-const TOKEN = '746d9b9164aad90762950daa0cdb21830d08650b58a8928f';
+// Gateway token: pass via URL hash (index.html#token=...) — never hardcode it.
+const TOKEN = (location.hash.match(/token=([\w-]+)/) || [])[1]
+    || prompt('Enter your OpenClaw gateway token (from ~/.openclaw/openclaw.json):');
 
 let ws = null;
 let turnCount = 0;
@@ -321,11 +323,14 @@ function connect() {
   };
 
   ws.onmessage = (event) => {
-    const msg = JSON.parse(event.data);
+    let msg;
+    try { msg = JSON.parse(event.data); }
+    catch (e) { console.warn('non-JSON frame ignored', e); return; }
 
     // Handle connect response
     if (msg.type === 'res' && msg.id === '1') {
       if (msg.error) {
+        authFailed = true;   // don't reconnect-loop on a bad token
         setStatus('disconnected', 'Auth failed: ' + msg.error);
         return;
       }
@@ -346,8 +351,13 @@ function connect() {
   };
 
   ws.onclose = () => {
-    setStatus('disconnected', 'Disconnected');
-    setTimeout(connect, 3000);
+    setStatus('disconnected', authFailed
+      ? 'Auth failed — fix the token and reload'
+      : 'Disconnected');
+    if (!authFailed) {
+      Object.keys(runTexts).forEach(k => delete runTexts[k]);
+      setTimeout(connect, 3000);
+    }
   };
 
   ws.onerror = () => {
@@ -364,6 +374,7 @@ function setStatus(state, label) {
 
 // Track latest full text per run (events are cumulative, not deltas)
 const runTexts = {};
+  let authFailed = false;
 
 function handleAgentEvent(payload) {
   const stream = payload.stream || '';
@@ -469,16 +480,19 @@ function startDebate() {
   document.getElementById('round-counter').textContent = 'Round: --';
   document.getElementById('optimist-messages').innerHTML = '';
   document.getElementById('skeptic-messages').innerHTML = '';
-  Object.keys(runBuffers).forEach(k => delete runBuffers[k]);
+  Object.keys(runTexts).forEach(k => delete runTexts[k]);
 
   setStatus('waiting', 'Debate starting...');
 
   // Trigger via local HTTP endpoint that runs openclaw agent CLI
-  fetch('http://127.0.0.1:8421/start', {
+  fetch('/debate_key.txt')
+  .then(r => r.text())
+  .then(key => fetch('http://127.0.0.1:8421/start', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json',
+               'X-Debate-Key': key.trim() },
     body: JSON.stringify({ topic: topic })
-  })
+  }))
   .then(r => r.json())
   .then(data => {
     setStatus('connected', 'Connected');

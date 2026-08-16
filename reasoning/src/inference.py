@@ -14,7 +14,7 @@ from collections import Counter
 import torch
 
 from .generate import generate
-from .verify import extract_answer
+from .verify import extract_answer, normalize
 
 
 # -----------------------------------------------------------------------
@@ -84,29 +84,40 @@ def self_consistency(
         if verbose:
             print(f"  [Sample {i+1}/{num_samples}] → {answer!r}")
 
-    # Majority vote
-    counts = Counter(answers)
+    # Majority vote on NORMALIZED answers so \frac{1}{2}, 1/2 and 0.5 pool
+    # into one candidate, and empty extractions never get a vote.
+    canon = {}   # normalized form -> first raw answer seen (for display)
+    votes = []
+    for ans in answers:
+        if not ans or not ans.strip():
+            continue
+        key = normalize(ans)
+        if not key:
+            continue
+        canon.setdefault(key, ans)
+        votes.append(key)
+    counts = Counter(votes)
     if not counts:
         return {"responses": responses, "answers": answers, "counts": {},
                 "winner": None}
 
     mc = counts.most_common()
     top_freq = mc[0][1]
-    winners = [ans for ans, freq in mc if freq == top_freq]
+    winners = [key for key, freq in mc if freq == top_freq]
 
-    # Break ties by first occurrence order
-    if len(winners) == 1:
-        winner = winners[0]
-    else:
-        for ans in answers:
-            if ans in winners:
-                winner = ans
+    # Break ties by first occurrence order (in vote order)
+    winner_key = winners[0]
+    if len(winners) > 1:
+        for key in votes:
+            if key in winners:
+                winner_key = key
                 break
+    winner = canon[winner_key]
 
     return {
         "responses": responses,
         "answers": answers,
-        "counts": dict(counts),
+        "counts": {canon[k]: v for k, v in counts.items()},
         "winner": winner,
     }
 
@@ -219,11 +230,21 @@ def self_refine(
         if verbose:
             print(f"  [iter {it}] extracted={revised_extracted!r}  score={revised_score:.3f}")
 
-        # Accept revision if score improves (or no scorer)
-        if score_fn is None or revised_score >= current_score:
+        # Accept revision only if the score strictly improves (ties keep the
+        # incumbent — otherwise the last revision always wins by default).
+        if score_fn is None or revised_score > current_score:
             current = revised
             current_extracted = revised_extracted
             current_score = revised_score
+
+    # Safety net: return the best-scoring candidate ever seen, so an early
+    # high-scoring answer can never be lost to later drift.
+    if score_fn is not None and history:
+        best = max(history, key=lambda h: h.get("score", float("-inf")))
+        if best.get("score", float("-inf")) > current_score:
+            current = best.get("answer", current)
+            current_extracted = best.get("extracted", current_extracted)
+            current_score = best["score"]
 
     return {
         "answer": current,

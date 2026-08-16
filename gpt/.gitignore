@@ -1,0 +1,11 @@
+# data / artifacts not tracked
+edu_fineweb10B/
+checkpoints/
+dataset/
+images/
+*.ipynb
+*.jsonl
+model.png
+lambda.md
+__pycache__/
+.DS_Store

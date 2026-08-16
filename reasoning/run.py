@@ -30,5 +30,5 @@ while True:
         continue
 
     ids = torch.tensor(tok.encode(prompt), device=device).unsqueeze(0)
-    out = greedy_cached(model, ids, max_tokens=200, eos_id=tok.eos_id)
+    out = greedy_cached(model, ids, max_tokens=200, eos_id=tok.eos_ids)
     print(tok.decode(out.squeeze(0).tolist()))

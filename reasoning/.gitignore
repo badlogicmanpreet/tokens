@@ -8,7 +8,11 @@ __pycache__/
 .venv/
 
 # uv
-uv.lock
 
 # OS
 .DS_Store
+
+# training/eval outputs
+checkpoints/
+math500_*.jsonl
+math_train.json
